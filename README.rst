@@ -55,8 +55,8 @@ For this reason, VCFPy was born and here it is!
 What's the State?
 -----------------
 
-VCFPy is the result of two full days of development plus some maintenance work later now (right now).
-I'm using it in several projects but it is not as battle-tested as PyVCF.
+VCFPy is used in a number of daily work projects at the Core Unit for Bioinformatics at the Berlin Institute of Health.
+So far, we have not encountered any major problems.
 
 Why Python 3 Only?
 ------------------
