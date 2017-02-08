@@ -1,3 +1,6 @@
+htslib
+vcfpy/cyhtslib/cyhtslib.c
+
 # Editor cruft
 *~
 .*.sw?

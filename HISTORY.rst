@@ -5,6 +5,7 @@ History
 HEAD
 ----
 
+* Starting wrapping of htslib for faster access to VCF
 * Fixing issue with tox and requirements.txt
 
 0.8.1 (2017-02-08)
