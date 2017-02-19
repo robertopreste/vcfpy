@@ -1,19 +1,4 @@
 from libc.stdint cimport int32_t, uint32_t, int8_t, int16_t, uint8_t
-import numpy as np
-cimport numpy as np
-np.import_array()
-
-cdef extern from "relatedness.h":
-    int related(int *gt_types, double *asum, int32_t *N, int32_t *ibs0,
-                int32_t *ibs2, int32_t n_samples)
-    float r_unphased(int32_t *a_gts, int32_t *b_gts, float f, int32_t n_samples)
-    int ibd(int agt, int bgt, int run_length, float pi, int *bins, int32_t n_bins)
-
-    int krelated(int32_t *gt_types, int32_t *ibs, int32_t *n, int32_t *hets, int32_t n_samples)
-
-cdef extern from "helpers.h":
-    int as_gts(int32_t *gts, int num_samples, int ploidy);
-    int as_gts012(int32_t *gts, int num_samples, int ploidy);
 
 cdef extern from "htslib/kstring.h":
 
@@ -29,7 +14,6 @@ cdef extern from "htslib/hts.h":
 
     int hts_set_threads(htsFile *fp, int n);
 
-
     cdef union ufp:
         hFILE *hfile;
 
@@ -40,7 +24,7 @@ cdef extern from "htslib/hts.h":
 
     ctypedef struct htsFormat:
         htsExactFormat format
-    
+
     ctypedef struct htsFile:
         ufp fp
         htsFormat format
@@ -88,7 +72,6 @@ cdef extern from "htslib/vcf.h":
 
     uint32_t bcf_float_missing = 0x7F800001;
 
-
     const int BCF_BT_NULL   = 0
     const int BCF_BT_INT8   = 1
     const int BCF_BT_INT16  = 2
@@ -109,8 +92,8 @@ cdef extern from "htslib/vcf.h":
     const int bcf_int16_vector_end  = -32767
     const int bcf_int32_vector_end  = -2147483647
 
-    const int bcf_int8_missing  = INT8_MIN 
-    const int bcf_int16_missing  = INT16_MIN 
+    const int bcf_int8_missing  = INT8_MIN
+    const int bcf_int16_missing  = INT16_MIN
     const int32_t bcf_int32_missing  = INT32_MIN
 
     ctypedef union uv1:
@@ -254,9 +237,6 @@ cdef extern from "htslib/vcf.h":
     int bcf_update_info(const bcf_hdr_t *hdr, bcf1_t *line, const char *key, const void *values, int n, int type);
     int bcf_update_filter(const bcf_hdr_t *hdr, bcf1_t *line, int *flt_ids, int n);
 
-
-
-
     ## genotypes
     inline void bcf_gt2alleles(int igt, int *a, int *b);
     int bcf_update_genotypes(const bcf_hdr_t *hdr, bcf1_t *line, const void *values, int n);
@@ -290,6 +270,3 @@ cdef extern from "htslib/vcf.h":
     char **bcf_index_seqnames(hts_idx_t *idx, bcf_hdr_t *hdr, int *n);
     char **tbx_seqnames(tbx_t *tbx, int *n)
     char **bcf_hdr_seqnames(bcf_hdr_t *hdr, int *n);
-
-
-

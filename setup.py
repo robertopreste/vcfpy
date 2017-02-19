@@ -48,7 +48,6 @@ sources = [x for x in sources
                'htsfile.c', 'tabix.c', 'bgzip.c',  # main()'s
                'hfile_s3.c', 'hfile_libcurl.c', # more dependencies
             ))]
-sources.append('vcfpy/cyhtslib/helpers.c')
 
 extension = Extension('vcfpy.cyhtslib.cyhtslib',
                       ['vcfpy/cyhtslib/cyhtslib.pyx'] + sources,

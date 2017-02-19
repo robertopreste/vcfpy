@@ -1,4 +1,3 @@
-from .cyhtslib import VCF, Variant, Writer, r_ as r_unphased, par_relatedness, par_het
-Reader = VCFReader = VCF
-
-__version__ = "0.7.0"
+# -*- coding: utf-8 -*-
+"""Wrapper module for cyhslib"""
+from .cyhtslib import VCFFile, Record
