@@ -11,6 +11,8 @@ import locale
 import os
 import sys
 
+from vcfpy.header import SamplesInfos
+
 # Cython imports
 
 from libc cimport stdlib
@@ -45,13 +47,15 @@ cdef from_bytes(s):
 cdef class VCFFile(object):
     """Representation of BCF/VCF file"""
     cdef htsFile *hts
-    cdef const bcf_hdr_t *hdr
+    cdef bcf_hdr_t *hdr
     cdef tbx_t *idx
     cdef hts_idx_t *hidx
     cdef int n_samples
     cdef int PASS
     cdef bytes fname
     cdef bint lazy
+    #: vcfpy.headre.SamplesInfo object
+    cdef public object samples
     cdef list _seqnames
     # holds a lookup of format field -> type.
     cdef dict format_types
@@ -73,9 +77,14 @@ cdef class VCFFile(object):
         cdef bcf_hdr_t *hdr
         hdr = self.hdr = bcf_hdr_read(self.hts)
         # Set samples to be pulled out, if only limited to a sub set
+        # TODO: pure python implementation is lacking this
         if samples is not None:
             self.set_samples(samples)
         self.n_samples = bcf_hdr_nsamples(self.hdr)
+        # Extract SamplesInfos from header, possibly after limiting to subset
+        if samples is None:
+            samples = self.get_samples()
+        self.samples = SamplesInfos(samples)
         # Initialize members
         self.PASS = -1
         self.fname = to_bytes(fname)
@@ -90,6 +99,48 @@ cdef class VCFFile(object):
         v = hts_set_threads(self.hts, n)
         if v < 0:
             raise Exception("error setting number of threads: %d" % v)
+
+    def set_samples(self, samples):
+        """Set the samples to be pulled from the VCF; this must be called before any iteration.
+        Parameters
+        ----------
+        samples: list
+            list of samples to extract.
+        """
+        if samples is None:
+            samples = "-".encode()
+        if isinstance(samples, list):
+            samples = to_bytes(",".join(samples))
+        else:
+            samples = to_bytes(samples)
+
+        ret = bcf_hdr_set_samples(self.hdr, <const char *>samples, 0)
+        assert ret >= 0, ("error setting samples", ret)
+        if ret != 0 and samples != "-":
+            s = samples.split(",")
+            if ret < len(s):
+                # TODO: update name, makes no sense here
+                sys.stderr.write("warning: not all samples in PED found in VCF\n")
+
+    def get_samples(self):
+        """Return list of samples from file
+        """
+        return [from_bytes(self.hdr.samples[i])
+                for i in range(0, bcf_hdr_nsamples(self.hdr))]
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        cdef bcf1_t *b = bcf_init()
+        cdef int ret
+        with nogil:
+            ret = bcf_read(self.hts, self.hdr, b)
+        if ret >= 0:
+            return newRecord(b, self)
+        else:
+            bcf_destroy(b)
+        raise StopIteration
 
     def __dealloc__(self):
         """Deallocation for VCFFile
@@ -201,3 +252,19 @@ cdef class Record(object):
             if n == 0:
                 return []
             return b';'.join(bcf_hdr_int2id(self.vcf.hdr, BCF_DT_ID, self.b.d.flt[i]) for i in range(n))
+
+
+cdef inline Record newRecord(bcf1_t *b, VCFFile vcf):
+    """Construct new Record object in ``bcf1_t`` ``*b`` and with ``VCFFile`` ``vcf``
+    """
+    cdef Record rec = Record.__new__(Record)
+    rec.b = b
+    if not vcf.lazy:
+        with nogil:
+            bcf_unpack(rec.b, 15)
+    else:
+        with nogil:
+            bcf_unpack(rec.b, 1|2|4)
+    rec.vcf = vcf
+    return rec
+
