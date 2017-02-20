@@ -11,7 +11,9 @@ import locale
 import os
 import sys
 
-from vcfpy.header import SamplesInfos
+from vcfpy import OrderedDict
+from vcfpy.header import Header, build_header_parsers, HeaderLine, SamplesInfos
+from vcfpy.warn_utils import WarningHelper
 
 # Cython imports
 
@@ -44,6 +46,83 @@ cdef from_bytes(s):
     return s
 
 
+cdef class _ReaderImpl(object):
+    """Wrapper for read-only VCFFile objects
+
+    Implements public, non-static interface of vcfpy.reader.Reader
+    """
+
+    cdef readonly str path
+    cdef readonly str tabix_path
+    cdef readonly bint lazy
+    cdef readonly int threads
+    cdef VCFFile _vcf_file
+    cdef readonly object header
+
+    def __init__(self, fname, tabix_path=None, lazy=False, samples=None, threads=None):
+        # Interpret special file name '-'
+        if fname == b'-' or fname == '-':
+            fname = b'/dev/stdin'
+        fname = to_bytes(fname)
+        # Assign properties
+        self.path = from_bytes(fname)
+        self.tabix_path = from_bytes(tabix_path)
+        self.lazy = lazy
+        self.threads = threads or 1
+        # Construct internal VCFFile
+        self._vcf_file = VCFFile(fname, b'rb', lazy, samples, threads)
+        # Load header into vcfpy.header.Header object
+        self.header = self._vcf_file.load_header()
+
+    def __iter__(self):
+        return self._vcf_file
+
+    # TODO: add orig_samples property that returns regardless of limiting to set of samples
+
+    property samples:
+        """SamplesInfos object with sample information"""
+        def __get__(self):
+            return self._vcf_file.samples
+
+
+cdef inline HeaderLineFactory newHeaderLineFactory(bcf_hdr_t * hdr, object warning_helper):
+    cdef HeaderLineFactory result = HeaderLineFactory.__init__(HeaderLineFactory)
+    result.hdr = hdr
+    result.warning_helper = warning_helper
+    result.parsers = build_header_parsers()
+    return result
+
+
+cdef class HeaderLineFactory:
+    """Helper class for converting from ``bcf_hdr_t`` entries to ``vcfpy.header.Header`` objects
+
+    Constructed with ``newHeaderLineFactory()``
+    """
+
+    cdef bcf_hdr_t * hdr
+    cdef object warning_helper
+    cdef dict parsers
+
+    cdef object build(self, bcf_hrec_t * hrec):
+        if hrec.type == BCF_HL_GEN:
+            return self._build_generic(hrec)
+        else:
+            return self._build_parsed(hrec)
+
+    cdef object _build_parsed(self, bcf_hrec_t * hrec):
+        mapping = OrderedDict(
+            (from_bytes(hrec.keys[i]), from_bytes(hrec.vals[i]))
+            for i in range(hrec.nkeys))
+        mapping_s = ','.join('%s=%s' % (k, repr(v)) for k, v in mapping.items())
+        key = from_bytes(hrec.key)
+        parser = self.parsers.get(key, self.parsers['__default__'])
+        return parser.parse_key_value(key, mapping_s)
+
+    cdef object _build_generic(self, bcf_hrec_t * hrec):
+        """Build "generic" header line, just key/value mapping, e.g., used for storing command lines"""
+        return HeaderLine(from_bytes(hrec.key), from_bytes(hrec.value))
+
+
 cdef class VCFFile(object):
     """Representation of BCF/VCF file"""
     cdef htsFile *hts
@@ -61,9 +140,7 @@ cdef class VCFFile(object):
     cdef dict format_types
 
     def __init__(self, fname, mode='r', lazy=False, samples=None, threads=None):
-        # Prepare file name, open file, balk out in the case of errors
-        if fname == b'-' or fname == '-':
-            fname = b'/dev/stdin'
+        # Open file and balk out in the case of errors
         if not os.path.exists(fname):
             raise Exception("bad path: %s" % fname)
         fname, mode = to_bytes(fname), to_bytes(mode)
@@ -128,8 +205,13 @@ cdef class VCFFile(object):
         return [from_bytes(self.hdr.samples[i])
                 for i in range(0, bcf_hdr_nsamples(self.hdr))]
 
-    def __iter__(self):
-        return self
+    cdef object load_header(self):
+        """Load header information into vcfpy.header.Header"""
+        wh = WarningHelper()
+        cdef HeaderLineFactory factory = newHeaderLineFactory(self.hdr, wh)
+        factory.build(self.hdr.hrec[0])
+        lines = [factory.build(self.hdr.hrec[i]) for i in range(self.hdr.nhrec)]
+        return Header(lines, self.samples, wh)
 
     def __next__(self):
         cdef bcf1_t *b = bcf_init()

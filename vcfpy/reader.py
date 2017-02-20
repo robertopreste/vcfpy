@@ -4,10 +4,15 @@
 
 import gzip
 import os
+import sys
 
 import pysam
 
 from . import parser
+from . import CYHTSLIB_ENABLED
+
+if CYHTSLIB_ENABLED:
+    from .cyhtslib import _ReaderImpl
 
 __author__ = 'Manuel Holtgrewe <manuel.holtgrewe@bihealth.de>'
 
@@ -28,24 +33,50 @@ class Reader:
     """
 
     @classmethod
-    def from_stream(klass, stream, path=None, tabix_path=None,
-                    record_checks=None):
+    def from_stream(
+            cls, stream, path=None, tabix_path=None, record_checks=None,
+            lazy=False, samples=None, threads=None):
         """Create new :py:class:`Reader` from file
+
+        If the Cython-htslib-based parsing is enabled then instead a Cython
+        object with a compatible interface will be returned
 
         :param stream: ``file``-like object to read from
         :param path: optional string with path to store (for display only)
         :param list record_checks: record checks to perform, can contain
             'INFO' and 'FORMAT'
+        :params list samples: ``str`` objects with samples to indicate to
+            (currently ignored by Python-based parser)
+        :param bool lazy: indicating lazy loading (ignored by Python-based
+            parser)
+        :param int threads: number of threads to use for parsing (ignored by
+            Python-based parser)
         """
-        record_checks = record_checks or []
         if tabix_path and not path:
             raise ValueError('Must give path if tabix_path is given')
+        if CYHTSLIB_ENABLED:
+            if stream != sys.stdin:
+                raise AttributeError(
+                    'Cannot use Cython implementation for stream != sys.stdin')
+            return _ReaderImpl(
+                '/dev/stdin', tabix_path, lazy, samples, threads)
+        else:
+            return cls._from_stream(stream, path, tabix_path, record_checks)
+
+    @classmethod
+    def _from_stream(cls, stream, path=None, tabix_path=None,
+                     record_checks=None):
+        record_checks = record_checks or []
         return Reader(stream=stream, path=path, tabix_path=tabix_path,
                       record_checks=record_checks)
 
     @classmethod
-    def from_path(klass, path, tabix_path=None, record_checks=None):
+    def from_path(klass, path, tabix_path=None, record_checks=None,
+                  lazy=False, samples=None, threads=None):
         """Create new :py:class:`Reader` from path
+
+        If the Cython-htslib-based parsing is enabled then instead a Cython
+        object with a compatible interface will be returned
 
         :param path: the path to load from (converted to ``str`` for
             compatibility with ``path.py``)
@@ -53,8 +84,21 @@ class Reader:
             automatic inferral from ``path`` will be tried on the fly
             if not given
         :param list record_checks: record checks to perform, can contain
-            'INFO' and 'FORMAT'
+            'INFO' and 'FORMAT'; ignored by Cython-htslib-based parser
+        :params list samples: ``str`` objects with samples to indicate to
+            (currently ignored by Python-based parser)
+        :param bool lazy: indicating lazy loading (ignored by Python-based
+            parser)
+        :param int threads: number of threads to use for parsing (ignored by
+            Python-based parser)
         """
+        if CYHTSLIB_ENABLED:
+            return _ReaderImpl(path, tabix_path, lazy, samples, threads)
+        else:
+            return klass._from_path(path, tabix_path, record_checks)
+
+    @classmethod
+    def _from_path(cls, path, tabix_path=None, record_checks=None):
         record_checks = record_checks or []
         path = str(path)
         if path.endswith('.gz'):
@@ -65,11 +109,11 @@ class Reader:
                     tabix_path = None  # guessing path failed
         else:
             f = open(path, 'rt')
-        return klass.from_stream(stream=f, path=path, tabix_path=tabix_path,
-                                 record_checks=record_checks)
+        return cls.from_stream(stream=f, path=path, tabix_path=tabix_path,
+                               record_checks=record_checks)
 
-    def __init__(self, stream, path=None, tabix_path=None,
-                 record_checks=None):
+    def __init__(self, stream, path=None, tabix_path=None, record_checks=None):
+        # TODO: make implementation details private by preprending '_'
         #: stream (``file``-like object) to read from
         self.stream = stream
         #: optional ``str`` with the path to the stream

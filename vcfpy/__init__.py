@@ -1,9 +1,19 @@
 # -*- coding: utf-8 -*-
 
+# TODO: use Python dict in case of dict, move this to "compat" module
 try:
     from cyordereddict import OrderedDict
 except ImportError:
     from collections import OrderedDict
+
+#: Boolean that gives whether cytslib is working (available and enabled)
+CYHTSLIB_ENABLED = True
+try:
+    from .cyhtslib import ENABLED as _CYHTSLIB_ENABLED
+    CYHTSLIB_ENABLED = _CYHTSLIB_ENABLED
+except ImportError:
+    CYHTSLIB_ENABLED = False
+
 
 from .exceptions import VCFPyException, InvalidHeaderException, \
     InvalidRecordException, IncorrectVCFFormat, HeaderNotFound
