@@ -12,7 +12,8 @@ import os
 import sys
 
 from vcfpy import OrderedDict
-from vcfpy.header import Header, build_header_parsers, HeaderLine, SamplesInfos
+from vcfpy.header import Header, HeaderLine, SamplesInfos
+from vcfpy.parser import build_header_parsers
 from vcfpy.warn_utils import WarningHelper
 
 # Cython imports
@@ -205,9 +206,9 @@ cdef class VCFFile(object):
         return [from_bytes(self.hdr.samples[i])
                 for i in range(0, bcf_hdr_nsamples(self.hdr))]
 
-    cdef object load_header(self):
+    cpdef object load_header(self):
         """Load header information into vcfpy.header.Header"""
-        wh = WarningHelper()
+        cpdef object wh = WarningHelper()
         cdef HeaderLineFactory factory = newHeaderLineFactory(self.hdr, wh)
         factory.build(self.hdr.hrec[0])
         lines = [factory.build(self.hdr.hrec[i]) for i in range(self.hdr.nhrec)]

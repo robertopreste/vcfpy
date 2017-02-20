@@ -11,7 +11,7 @@ CYHTSLIB_ENABLED = True
 try:
     from .cyhtslib import ENABLED as _CYHTSLIB_ENABLED
     CYHTSLIB_ENABLED = _CYHTSLIB_ENABLED
-except ImportError:
+except ImportError as e:
     CYHTSLIB_ENABLED = False
 
 
