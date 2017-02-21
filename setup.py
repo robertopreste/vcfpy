@@ -46,7 +46,7 @@ sources = [x for x in glob.glob('htslib/*.c')
 sources = [x for x in sources
            if not x.endswith((
                'htsfile.c', 'tabix.c', 'bgzip.c',  # main()'s
-               'hfile_s3.c', 'hfile_libcurl.c', # more dependencies
+               'hfile_s3.c', 'hfile_libcurl.c',  # more dependencies
             ))]
 
 extension = Extension('vcfpy.cyhtslib.cyhtslib',

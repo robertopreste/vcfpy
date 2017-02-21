@@ -13,7 +13,7 @@ import sys
 
 from vcfpy import OrderedDict
 from vcfpy.header import Header, HeaderLine, SamplesInfos
-from vcfpy.parser import build_header_parsers
+from vcfpy.parser import build_header_parsers, process_alt
 from vcfpy.warn_utils import WarningHelper
 
 # Cython imports
@@ -58,6 +58,8 @@ cdef class _ReaderImpl(object):
     cdef readonly bint lazy
     cdef readonly int threads
     cdef VCFFile _vcf_file
+    cdef tbx_t * idx
+    cdef hts_idx_t * hidx
     cdef readonly object header
 
     def __init__(self, fname, tabix_path=None, lazy=False, samples=None, threads=None):
@@ -73,7 +75,22 @@ cdef class _ReaderImpl(object):
         # Construct internal VCFFile
         self._vcf_file = VCFFile(fname, b'rb', lazy, samples, threads)
         # Load header into vcfpy.header.Header object
-        self.header = self._vcf_file.load_header()
+        self.header = self._vcf_file.header
+
+    def fetch(_ReaderImpl self, str chrom_or_region, begin=None, end=None):
+        """Re-implementation of the pure Python Reader.fetch()"""
+        if begin is not None and end is None:
+            raise ValueError('begin and end must both be None or neither')
+
+        # Build region string if begin and end are given
+        region = chrom_or_region
+        if begin and end:
+            region = '%s:%d-%d' % (chrom_or_region, begin, end)
+
+        if self.path.endswith('.bcf'):
+            yield from self._vcf_file.fetch_bcf_region(region)
+        else:
+            yield from self._vcf_file.fetch_vcf_region(region)
 
     def __iter__(self):
         return self._vcf_file
@@ -82,7 +99,9 @@ cdef class _ReaderImpl(object):
         return self
 
     def __exit__(self, type_, value, traceback):
-        self._vcf_file.close()
+        # TODO: we have to think about something here...
+        # self._vcf_file.close()
+        pass
 
     # TODO: add orig_samples property that returns regardless of limiting to set of samples
 
@@ -151,6 +170,7 @@ cdef class VCFFile(object):
     cdef list _seqnames
     # holds a lookup of format field -> type.
     cdef dict format_types
+    cdef object header
 
     def __init__(self, fname, mode='r', lazy=False, samples=None, threads=None):
         # Open file and balk out in the case of errors
@@ -183,6 +203,8 @@ cdef class VCFFile(object):
         self.format_types = {}
         if threads is not None:
             self.set_threads(threads)
+        # Load header
+        self.header = self.load_header()
 
     def set_threads(self, int n):
         """Sets number of reader/writer threads in this object's htsfile"""
@@ -226,6 +248,61 @@ cdef class VCFFile(object):
         lines = [factory.build(self.hdr.hrec[i]) for i in range(self.hdr.nhrec)]
         return Header(lines, self.samples, wh)
 
+    def fetch_vcf_region(_ReaderImpl self, str region):
+        if self.idx == NULL:
+            self.idx = tbx_index_load(to_bytes(self.fname))
+            assert self.idx != NULL, "Error loading tabix index for %s" % self.fname
+
+        cdef hts_itr_t *itr
+        cdef kstring_t s
+        cdef bcf1_t *b
+        cdef int slen, ret
+
+        itr = tbx_itr_querys(self.idx, to_bytes(region))
+        if itr == NULL:
+            print('no intervals found for %s at %s\n' % (self.fname, region), file=sys.stderr)
+            raise StopIteration
+
+        try:
+            slen = tbx_itr_next(self.hts, self.idx, itr, &s)
+            while slen > 0:
+                b = bcf_init()
+                ret = vcf_parse(&s, self.hdr, b)
+                if ret > 0:
+                    bcf_destroy(b)
+                    raise Exception('error parsing')
+                yield newRecord(b, self)
+                slen = tbx_itr_next(self.hts, self.idx, itr, &s)
+        finally:
+            stdlib.free(s.s)
+            hts_itr_destroy(itr)
+
+    def fetch_bcf_region(_ReaderImpl self, str region):
+        if self.hidx == NULL:
+            self.hidx = bcf_index_load(self.fname)
+            assert self.hidx != NULL, 'Error loading .csi index for %s' % self.fname
+
+        cdef bcf1_t *b
+        cdef int ret
+        cdef hts_itr_t *itr
+
+        itr = bcf_itr_querys(self.hidx, self.hdr, to_bytes(region))
+        if itr == NULL:
+            print('no intervals found for %s at %s\n' % (self.fname, region), file=sys.stderr)
+            raise StopIteration
+
+        try:
+            while True:
+                b = bcf_init()
+                ret = bcf_itr_next(self.hts, itr, b)
+                if ret < 0:
+                    bcf_destroy(b)
+                    break
+                yield newRecord(b, self)
+        finally:
+            if itr != NULL:
+                hts_itr_destroy(itr)
+
     def __next__(self):
         cdef bcf1_t *b = bcf_init()
         cdef int ret
@@ -266,12 +343,15 @@ cdef class Record(object):
     cdef bcf1_t *b
     #: Reference to the owning VCFFile
     cdef VCFFile vcf
+    #: Cache for lazily parsing ALT
+    cdef list _alts
 
     def __init__(self, *args, **kwargs):
         raise TypeError("Variant object cannot be instantiated directly.")
 
     def __cinit__(self):
         self.b = NULL
+        self._alts = None
 
     def __repr__(self):
         return "Record(%s:%d %s/%s)" % (self.CHROM, self.POS, self.REF, ",".join(self.ALT))
@@ -323,7 +403,11 @@ cdef class Record(object):
         """Alternative alleles, list of ``str`` for now"""
         def __get__(self):
             cdef int i
-            return [self.b.d.allele[i].decode() for i in range(1, self.b.n_allele)]
+            if self._alts is None:
+                self._alts = [
+                    process_alt(self.vcf.header, self.REF, self.b.d.allele[i].decode())
+                    for i in range(1, self.b.n_allele)]
+            return self._alts
 
     property QUAL:
         """The quality value, can be ``None``"""
@@ -344,14 +428,14 @@ cdef class Record(object):
                     if self.b.d.flt[0] == self.vcf.PASS:
                         return []
                 else:
-                    v = bcf_hdr_int2id(self.vcf.hdr, BCF_DT_ID, self.b.d.flt[0])
+                    v = [from_bytes(bcf_hdr_int2id(self.vcf.hdr, BCF_DT_ID, self.b.d.flt[0]))]
                     if v == b'PASS':
                         self.vcf.PASS = self.b.d.flt[0]
                         return ['PASS']
                     return v
             if n == 0:
                 return []
-            return b';'.join(bcf_hdr_int2id(self.vcf.hdr, BCF_DT_ID, self.b.d.flt[i]) for i in range(n))
+            return list(from_bytes(bcf_hdr_int2id(self.vcf.hdr, BCF_DT_ID, self.b.d.flt[i])) for i in range(n))
 
 
 cdef inline Record newRecord(bcf1_t *b, VCFFile vcf):

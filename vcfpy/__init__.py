@@ -7,12 +7,14 @@ except ImportError:
     from collections import OrderedDict
 
 #: Boolean that gives whether cytslib is working (available and enabled)
-CYHTSLIB_ENABLED = True
 try:
+    CYHTSLIB_ENABLED = True
     from .cyhtslib import ENABLED as _CYHTSLIB_ENABLED
     CYHTSLIB_ENABLED = _CYHTSLIB_ENABLED
 except ImportError as e:
     CYHTSLIB_ENABLED = False
+finally:
+    from . import reader, writer  # ensure that they see the variable
 
 
 from .exceptions import VCFPyException, InvalidHeaderException, \

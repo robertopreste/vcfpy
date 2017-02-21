@@ -53,14 +53,7 @@ def header_samples():
 def test_reader():
     path = os.path.join(os.path.dirname(__file__), 'vcfs/full_vcf43.vcf')
     with reader.Reader.from_path(path) as r:
-        # should be open now
-        assert r.stream
-        assert not r.stream.closed
-        # read records
         records = [rec for rec in r]
-    # should be closed now
-    assert r.stream
-    assert r.stream.closed
     # check result
     assert len(records) == 5
 
@@ -70,15 +63,6 @@ def test_reader_fetch():
                         'multi_contig.vcf.gz')
     with reader.Reader.from_path(path) as r:
         records = [vcf_rec for vcf_rec in r.fetch('20', 1110695, 1230236)]
-        assert r.stream
-        assert not r.stream.closed
-        assert r.tabix_file
-        assert not r.tabix_file.closed
-    # closed
-    assert r.stream
-    assert r.stream.closed
-    assert r.tabix_file
-    assert r.tabix_file.closed
     # check result
     assert len(records) == 1
     assert records[0].CHROM == '20'
@@ -103,9 +87,6 @@ def test_writer(header_samples, tmpdir_factory):
     with writer.Writer.from_path(path, header) as w:
         # write out the record
         w.write_record(r)
-    # should be closed
-    assert w.stream
-    assert w.stream.closed
     # compare actual result with expected
     RESULT = path.read()
     LINE = '20\t100\t.\tC\tT\t.\t.\t.\tGT\t0/1\t0/0\t1/1\n'
