@@ -13,7 +13,7 @@ def test_read_text():
     path = os.path.join(os.path.dirname(__file__), 'vcfs/full_vcf43.vcf')
     r = reader.Reader.from_path(path)
     assert r.header
-    assert len(r.header.lines) == 18
+    assert len(r.header.lines) == 19
     assert r.samples
     assert r.samples.names == ['NA00001', 'NA00002', 'NA00003']
     records = []
@@ -26,7 +26,7 @@ def test_read_bgzip():
     path = os.path.join(os.path.dirname(__file__), 'vcfs/full_vcf43.vcf.gz')
     r = reader.Reader.from_path(path)
     assert r.header
-    assert len(r.header.lines) == 18
+    assert len(r.header.lines) == 19
     assert r.samples
     assert r.samples.names == ['NA00001', 'NA00002', 'NA00003']
     records = []
@@ -40,7 +40,7 @@ if CYHTSLIB_ENABLED:
         path = os.path.join(os.path.dirname(__file__), 'vcfs/full_vcf43.bcf')
         r = reader.Reader.from_path(path)
         assert r.header
-        assert len(r.header.lines) == 18
+        assert len(r.header.lines) == 21
         assert r.samples
         assert r.samples.names == ['NA00001', 'NA00002', 'NA00003']
         records = []

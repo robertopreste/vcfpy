@@ -52,6 +52,7 @@ sources = [x for x in sources
 extension = Extension('vcfpy.cyhtslib.cyhtslib',
                       ['vcfpy/cyhtslib/cyhtslib.pyx'] + sources,
                       libraries=['z'],
+                      extra_compile_args=['-O0'],
                       include_dirs=['htslib', 'vcfpy/cyhtslib'])
 
 # Update cmdclass dict
