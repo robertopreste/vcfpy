@@ -29,6 +29,11 @@ import inspect
 if not hasattr(sys.modules[__name__], '__file__'):
     __file__ = inspect.getfile(inspect.currentframe())
 
+# Constants for defining whether to iterate over keys or values or both
+cdef int INFO_ITER_KEYS = 1
+cdef int INFO_ITER_VALUES = 2
+cdef int INFO_ITER_ITEMS = 3
+
 
 cdef to_bytes(s, enc=ENC):
     """Helper function for ensuring ``bytes`` type"""
@@ -338,6 +343,21 @@ cdef class VCFFile(object):
         self.close()
 
 
+cdef inline Record newRecord(bcf1_t *b, VCFFile vcf):
+    """Construct new Record object in ``bcf1_t`` ``*b`` and with ``VCFFile`` ``vcf``
+    """
+    cdef Record rec = Record.__new__(Record)
+    rec.b = b
+    if not vcf.lazy:
+        with nogil:
+            bcf_unpack(rec.b, 15)
+    else:
+        with nogil:
+            bcf_unpack(rec.b, 1|2|4)
+    rec.vcf = vcf
+    return rec
+
+
 cdef class Record(object):
     #: Pointer to the C struct with the BCF record
     cdef bcf1_t *b
@@ -354,7 +374,7 @@ cdef class Record(object):
         self._alts = None
 
     def __repr__(self):
-        return "Record(%s:%d %s/%s)" % (self.CHROM, self.POS, self.REF, ",".join(self.ALT))
+        return "Record(%s:%d %s/%s)" % (self.CHROM, self.POS, self.REF, ",".join(self.ALT.serialize()))
 
     def __str__(self):
         cdef kstring_t s
@@ -437,18 +457,201 @@ cdef class Record(object):
                 return []
             return list(from_bytes(bcf_hdr_int2id(self.vcf.hdr, BCF_DT_ID, self.b.d.flt[i])) for i in range(n))
 
+    property INFO:
+        """Value of the INFO field from VCF, as InfoDict"""
+        def __get__(self):
+            return newInfoDict(self.vcf.hdr, self.b)
 
-cdef inline Record newRecord(bcf1_t *b, VCFFile vcf):
-    """Construct new Record object in ``bcf1_t`` ``*b`` and with ``VCFFile`` ``vcf``
+
+cdef inline InfoDict newInfoDict(bcf_hdr_t * hdr, bcf1_t * b):
+    cdef InfoDict result = InfoDict()
+    result.hdr = hdr
+    result.b = b
+    return result
+
+
+cdef class InfoDict(object):
+    """Dictionary-like structure for ``Record.INFO``
+    
+    Such objects are create internally by accessing ``Variant.INFO``
+    is acts like a dictionary where keys are expected to be in the INFO field of the Variant
+    and values are typed according to what is specified in the VCF header
     """
-    cdef Record rec = Record.__new__(Record)
-    rec.b = b
-    if not vcf.lazy:
-        with nogil:
-            bcf_unpack(rec.b, 15)
+    cdef bcf_hdr_t *hdr
+    cdef bcf1_t *b
+
+    def __cinit__(self):
+        self.hdr = NULL
+        self.b = NULL
+
+    def __setitem__(self, key, value):
+        # only support strings for now.
+        if value is True or value is False:
+            ret = bcf_update_info_flag(self.hdr, self.b, to_bytes(key), b"", int(value))
+            if ret != 0:
+                raise Exception("not able to set flag", key, value, ret)
+            return
+
+        ret = bcf_update_info_string(self.hdr, self.b, to_bytes(key), to_bytes(value))
+        if ret != 0:
+            raise Exception("not able to set: %s -> %s (%d)", key, value, ret)
+
+    cdef _getval(InfoDict self, bcf_info_t * info, char *key):
+        cdef bytes skey = key
+        cdef long * ptr = NULL
+        if (skey == b"AF"):
+            ptr[0] = 1;
+
+        if info.len == 1:
+            if info.type == BCF_BT_INT8:
+                if info.v1.i == INT8_MIN:
+                    return None
+                return <int>(info.v1.i)
+
+            if info.type == BCF_BT_INT16:
+                if info.v1.i == INT16_MIN:
+                    return None
+                return <int>(info.v1.i)
+
+            if info.type == BCF_BT_INT32:
+                if info.v1.i == INT32_MIN:
+                    return None
+                return <int>(info.v1.i)
+
+            if info.type == BCF_BT_FLOAT:
+                if bcf_float_is_missing(info.v1.f):
+                    return None
+                return info.v1.f
+
+        if info.type == BCF_BT_CHAR:
+            v = info.vptr[:info.vptr_len]
+            if len(v) > 0 and v[0] == 0x7:
+                return None
+            return from_bytes(v)
+
+        # FLAG.
+        if info.len == 0:
+            return bcf_hdr_id2type(self.hdr, BCF_HL_INFO, info.key) == BCF_HT_FLAG
+
+        return bcf_array_to_object(info.vptr, info.type, info.len)
+
+    def __getitem__(self, okey):
+        okey = to_bytes(okey)
+        cdef char *key = okey
+        cdef bcf_info_t *info = bcf_get_info(self.hdr, self.b, key)
+        if info == NULL:
+            raise KeyError(key)
+        return self._getval(info, key)
+
+    def get(self, key, default=None):
+        try:
+            return self.__getitem__(key)
+        except KeyError:
+            return default
+
+    def __iter__(self):
+        return self.keys()
+
+    def keys(self):
+        return newInfoDictIter(self, INFO_ITER_KEYS)
+
+    def values(self):
+        return newInfoDictIter(self, INFO_ITER_VALUES)
+
+    def items(self):
+        return newInfoDictIter(self, INFO_ITER_ITEMS)
+
+
+cdef inline InfoDictIter newInfoDictIter(InfoDict info_dict, int iter_mode):
+    cdef InfoDictIter result = InfoDictIter()
+    result.info_dict = info_dict
+    result.iter_mode = iter_mode
+    return result
+
+
+cdef class InfoDictIter(object):
+    """Iterator for ``InfoDict`` class"""
+
+    cdef InfoDict info_dict
+    cdef int _i
+    cdef int iter_mode
+
+    def __init__(self):
+        self.info_dict = None
+        self._i = 0
+        self.iter_mode = 0
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        cdef bcf_info_t *info = NULL
+        cdef char *name
+        while info == NULL:
+            if self._i >= self.info_dict.b.n_info:
+                raise StopIteration
+            info = &(self.info_dict.b.d.info[self._i])
+            self._i += 1
+        name = bcf_hdr_int2id(self.info_dict.hdr, BCF_DT_ID, info.key)
+        if self.iter_mode == INFO_ITER_KEYS:
+            return name.decode()
+        elif self.iter_mode == INFO_ITER_VALUES:
+            return self.info_dict._getval(info, name)
+        else:
+            return name.decode(), self.info_dict._getval(info, name)
+
+
+# This function is copied verbatim from pysam/cbcf.pyx
+cdef bcf_array_to_object(void *data, int type, int n, int scalar=0):
+    cdef char    *datac
+    cdef int8_t  *data8
+    cdef int16_t *data16
+    cdef int32_t *data32
+    cdef float   *dataf
+    cdef int      i
+
+    if not data or n <= 0:
+        return None
+
+    if type == BCF_BT_CHAR:
+        datac = <char *>data
+        value = datac[:n].decode() if datac[0] != bcf_str_missing else None
     else:
-        with nogil:
-            bcf_unpack(rec.b, 1|2|4)
-    rec.vcf = vcf
-    return rec
+        value = []
+        if type == BCF_BT_INT8:
+            data8 = <int8_t *>data
+            for i in range(n):
+                if data8[i] == bcf_int8_vector_end:
+                    break
+                value.append(data8[i] if data8[i] != bcf_int8_missing else None)
+        elif type == BCF_BT_INT16:
+            data16 = <int16_t *>data
+            for i in range(n):
+                if data16[i] == bcf_int16_vector_end:
+                    break
+                value.append(data16[i] if data16[i] != bcf_int16_missing else None)
+        elif type == BCF_BT_INT32:
+            data32 = <int32_t *>data
+            for i in range(n):
+                if data32[i] == bcf_int32_vector_end:
+                    break
+                value.append(data32[i] if data32[i] != bcf_int32_missing else None)
+        elif type == BCF_BT_FLOAT:
+            dataf = <float *>data
+            for i in range(n):
+                if bcf_float_is_vector_end(dataf[i]):
+                    break
+                value.append(dataf[i] if not bcf_float_is_missing(dataf[i]) else None)
+        else:
+            raise TypeError('unsupported info type code')
+
+        print('>>> n = %d' % (n,))
+
+        if not value:
+            value = None
+        elif scalar and len(value) == 1:
+            value = value[0]
+        else:
+            value = tuple(value)
+    return value
 
