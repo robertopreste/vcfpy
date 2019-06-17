@@ -229,9 +229,10 @@ class Call:
         self.called = None
         #: the number of alleles in this sample's call
         self.plodity = None
-        if self.data.get("GT", None) is not None:
+        # My temporary fix
+        if self.data.get("GT", None) is not None and len(self.data.get("GT", None)) != 0:
             self.gt_alleles = []
-            for allele in ALLELE_DELIM.split(self.data["GT"]):
+            for allele in ALLELE_DELIM.split(self.data["GT"][0]):
                 if allele == ".":
                     self.gt_alleles.append(None)
                 else:
